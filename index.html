@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="nl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cijferberekening per punt</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #fff; --ink: #1d2330; --muted: #6b7280;
+    --line: #e3e6eb; --accent: #2457c5; --bad: #c0392b; --badbg: #fdecea;
+    --good: #1e7a46;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+         background: var(--bg); color: var(--ink); }
+  main { max-width: 1100px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 1.4rem; margin: 0 0 4px; }
+  .sub { color: var(--muted); margin: 0 0 20px; font-size: .95rem; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+          padding: 16px; margin-bottom: 16px; }
+  .inputs { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 14px; }
+  label { display: block; font-size: .85rem; color: var(--muted); margin-bottom: 4px; }
+  input, select { width: 100%; padding: 8px 10px; font-size: 1rem; border: 1px solid var(--line);
+                  border-radius: 6px; background: #fff; color: var(--ink); }
+  input:focus, select:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  .summary { margin-top: 14px; font-size: .95rem; line-height: 1.5; }
+  .summary b { color: var(--accent); }
+  .err { color: var(--bad); }
+  .bar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+  button { padding: 8px 14px; font-size: .95rem; border-radius: 6px; cursor: pointer;
+           border: 1px solid var(--accent); background: var(--accent); color: #fff; }
+  button.ghost { background: #fff; color: var(--accent); }
+  .msg { color: var(--good); font-size: .9rem; }
+  #chartWrap { display: none; }
+  #chartWrap.open { display: block; }
+  svg { width: 100%; height: auto; display: block; }
+  .table { columns: 120px; column-gap: 14px; column-rule: 1px solid var(--line); }
+  .row { display: flex; justify-content: space-between; padding: 3px 8px; border-radius: 4px;
+         break-inside: avoid; font-variant-numeric: tabular-nums; font-size: .95rem; }
+  .row:nth-child(even) { background: #f3f5f8; }
+  .row .p { color: var(--muted); }
+  .row .c { font-weight: 600; }
+  .row.bad .c { color: var(--bad); }
+  .row.ces { outline: 2px solid var(--accent); outline-offset: -2px; }
+  .legend { font-size: .85rem; color: var(--muted); margin-top: 10px; }
+  @media print {
+    body { background: #fff; }
+    .noprint { display: none !important; }
+    .card { border: none; padding: 0; }
+    .table { columns: 6; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Cijferberekening per punt</h1>
+  <p class="sub noprint">Lineair van het minimumcijfer naar het cesuurcijfer, daarna lineair door naar een 10 bij maximale score.</p>
+
+  <section class="card noprint">
+    <div class="inputs">
+      <div>
+        <label for="max">Totaal aantal punten</label>
+        <input id="max" type="number" min="1" step="0.5" value="40">
+      </div>
+      <div>
+        <label for="pct">Cesuur (% van de punten)</label>
+        <input id="pct" type="number" min="1" max="99" step="0.5" value="55">
+      </div>
+      <div>
+        <label for="ces">Cijfer bij cesuur</label>
+        <select id="ces">
+          <option value="5.5" selected>5,5</option>
+          <option value="6">6,0</option>
+        </select>
+      </div>
+      <div>
+        <label for="min">Cijfer bij 0 punten</label>
+        <input id="min" type="number" min="0" max="5" step="0.1" value="1">
+      </div>
+      <div>
+        <label for="step">Stapgrootte punten</label>
+        <select id="step">
+          <option value="1" selected>Hele punten</option>
+          <option value="0.5">Halve punten</option>
+        </select>
+      </div>
+    </div>
+    <div class="summary" id="summary"></div>
+  </section>
+
+  <section class="card">
+    <div class="bar noprint">
+      <button id="toggleChart" class="ghost" type="button">Toon grafiek</button>
+      <button id="copy" class="ghost" type="button">Kopieer tabel (voor Excel)</button>
+      <span class="msg" id="msg"></span>
+    </div>
+
+    <div id="chartWrap" class="noprint">
+      <svg id="chart" viewBox="0 0 720 380" role="img" aria-label="Grafiek van cijfer tegen punten"></svg>
+      <p class="legend">Beweeg over de grafiek om punten en cijfer af te lezen.</p>
+    </div>
+
+    <div class="table" id="table"></div>
+    <p class="legend">Cijfers afgerond op 1 decimaal. Rood = onvoldoende (lager dan 5,5). Omlijnd = eerste score op of boven de cesuur.</p>
+  </section>
+</main>
+
+<script>
+const $ = id => document.getElementById(id);
+const fmt = x => x.toFixed(1).replace('.', ',');
+const fmtP = x => (Number.isInteger(x) ? String(x) : x.toFixed(1).replace('.', ','));
+const round1 = x => Math.round((x + 1e-9) * 10) / 10;
+
+function settings() {
+  return {
+    max: parseFloat($('max').value),
+    pct: parseFloat($('pct').value),
+    ces: parseFloat($('ces').value),
+    min: parseFloat($('min').value),
+    step: parseFloat($('step').value),
+  };
+}
+
+function grade(p, s) {
+  const c = s.max * s.pct / 100;
+  if (p <= c) return s.min + (s.ces - s.min) * (p / c);
+  return s.ces + (10 - s.ces) * (p - c) / (s.max - c);
+}
+
+function valid(s) {
+  if (!(s.max > 0)) return 'Vul een totaal aantal punten groter dan 0 in.';
+  if (!(s.pct > 0 && s.pct < 100)) return 'Het cesuurpercentage moet tussen 0 en 100 liggen.';
+  if (!(s.min >= 0 && s.min < s.ces)) return 'Het minimumcijfer moet lager zijn dan het cesuurcijfer.';
+  if (s.max / s.step > 2000) return 'Te veel punten voor de tabel.';
+  return null;
+}
+
+let rows = [];
+
+function render() {
+  const s = settings();
+  const e = valid(s);
+  if (e) {
+    $('summary').innerHTML = '<span class="err">' + e + '</span>';
+    $('table').innerHTML = '';
+    $('chart').innerHTML = '';
+    return;
+  }
+  const c = s.max * s.pct / 100;
+  rows = [];
+  for (let i = 0; i * s.step <= s.max + 1e-9; i++) {
+    const p = round1(i * s.step);
+    rows.push({ p, g: round1(grade(p, s)) });
+  }
+  // eerste score op of boven de cesuur
+  const cesRow = rows.find(r => r.p >= c - 1e-9);
+  const firstPass = rows.find(r => r.g >= 5.5);
+
+  $('summary').innerHTML =
+    'Cesuur ligt bij <b>' + fmtP(round1(c)) + ' punten</b> (' + fmt(s.ces) + '). ' +
+    'Per punt onder de cesuur: <b>+' + ((s.ces - s.min) / c).toFixed(3).replace('.', ',') + '</b>, ' +
+    'erboven: <b>+' + ((10 - s.ces) / (s.max - c)).toFixed(3).replace('.', ',') + '</b>. ' +
+    (firstPass ? 'Eerste voldoende (afgerond ≥ 5,5) bij <b>' + fmtP(firstPass.p) + ' punten</b>.' : '');
+
+  $('table').innerHTML = rows.map(r =>
+    '<div class="row' + (r.g < 5.5 ? ' bad' : '') + (r === cesRow ? ' ces' : '') + '">' +
+    '<span class="p">' + fmtP(r.p) + '</span><span class="c">' + fmt(r.g) + '</span></div>'
+  ).join('');
+
+  drawChart(s, c);
+}
+
+/* ---------- grafiek ---------- */
+const W = 720, H = 380, L = 50, R = 20, T = 20, B = 45;
+let curS = null;
+function X(p, s) { return L + (W - L - R) * p / s.max; }
+function Y(g) { return T + (H - T - B) * (10 - g) / 9; } // 1..10
+
+function niceStep(max) {
+  const raw = max / 10;
+  const pow = Math.pow(10, Math.floor(Math.log10(raw)));
+  for (const m of [1, 2, 5, 10]) if (raw <= m * pow) return m * pow;
+  return 10 * pow;
+}
+
+function drawChart(s, c) {
+  curS = s;
+  const ns = 'http://www.w3.org/2000/svg';
+  let h = '';
+  // horizontale rasterlijnen
+  for (let g = 1; g <= 10; g++) {
+    h += `<line x1="${L}" x2="${W - R}" y1="${Y(g)}" y2="${Y(g)}" stroke="#e3e6eb"/>`;
+    h += `<text x="${L - 8}" y="${Y(g) + 4}" text-anchor="end" font-size="12" fill="#6b7280">${g}</text>`;
+  }
+  // verticale rasterlijnen
+  const st = niceStep(s.max);
+  for (let p = 0; p <= s.max + 1e-9; p += st) {
+    h += `<line x1="${X(p, s)}" x2="${X(p, s)}" y1="${T}" y2="${H - B}" stroke="#eef0f3"/>`;
+    h += `<text x="${X(p, s)}" y="${H - B + 18}" text-anchor="middle" font-size="12" fill="#6b7280">${fmtP(round1(p))}</text>`;
+  }
+  // 5,5-lijn
+  h += `<line x1="${L}" x2="${W - R}" y1="${Y(5.5)}" y2="${Y(5.5)}" stroke="#c0392b" stroke-dasharray="4 4" opacity=".6"/>`;
+  // hulplijnen cesuur
+  h += `<line x1="${X(c, s)}" x2="${X(c, s)}" y1="${Y(s.ces)}" y2="${H - B}" stroke="#2457c5" stroke-dasharray="3 3"/>`;
+  h += `<line x1="${L}" x2="${X(c, s)}" y1="${Y(s.ces)}" y2="${Y(s.ces)}" stroke="#2457c5" stroke-dasharray="3 3"/>`;
+  // de lijn
+  h += `<polyline fill="none" stroke="#2457c5" stroke-width="3" stroke-linejoin="round"
+        points="${X(0, s)},${Y(s.min)} ${X(c, s)},${Y(s.ces)} ${X(s.max, s)},${Y(10)}"/>`;
+  h += `<circle cx="${X(c, s)}" cy="${Y(s.ces)}" r="5" fill="#2457c5"/>`;
+  h += `<text x="${X(c, s) + 8}" y="${Y(s.ces) + 18}" font-size="12" fill="#2457c5">cesuur: ${fmtP(round1(c))} p → ${fmt(s.ces)}</text>`;
+  // asnamen
+  h += `<text x="${(L + W - R) / 2}" y="${H - 6}" text-anchor="middle" font-size="13" fill="#1d2330">punten</text>`;
+  h += `<text x="14" y="${(T + H - B) / 2}" text-anchor="middle" font-size="13" fill="#1d2330" transform="rotate(-90 14 ${(T + H - B) / 2})">cijfer</text>`;
+  // hover
+  h += `<g id="hover" style="display:none">
+          <line id="hvl" y1="${T}" y2="${H - B}" stroke="#1d2330" opacity=".25"/>
+          <circle id="hc" r="5" fill="#fff" stroke="#1d2330" stroke-width="2"/>
+          <rect id="hbox" rx="4" fill="#1d2330" height="22"/>
+          <text id="ht" font-size="12" fill="#fff"></text>
+        </g>`;
+  h += `<rect id="hit" x="${L}" y="${T}" width="${W - L - R}" height="${H - T - B}" fill="transparent"/>`;
+  $('chart').innerHTML = h;
+
+  const svg = $('chart');
+  const hit = $('hit');
+  hit.addEventListener('mousemove', ev => {
+    const pt = svg.createSVGPoint();
+    pt.x = ev.clientX; pt.y = ev.clientY;
+    const loc = pt.matrixTransform(svg.getScreenCTM().inverse());
+    let p = (loc.x - L) / (W - L - R) * curS.max;
+    p = Math.min(curS.max, Math.max(0, Math.round(p / curS.step) * curS.step));
+    const g = round1(grade(p, curS));
+    const x = X(p, curS), y = Y(g);
+    $('hover').style.display = '';
+    $('hvl').setAttribute('x1', x); $('hvl').setAttribute('x2', x);
+    $('hc').setAttribute('cx', x); $('hc').setAttribute('cy', y);
+    const label = fmtP(round1(p)) + ' p → ' + fmt(g);
+    const bw = label.length * 7 + 14;
+    const bx = Math.min(x + 10, W - R - bw), by = Math.max(T, y - 32);
+    $('hbox').setAttribute('x', bx); $('hbox').setAttribute('y', by); $('hbox').setAttribute('width', bw);
+    $('ht').setAttribute('x', bx + 7); $('ht').setAttribute('y', by + 15);
+    $('ht').textContent = label;
+  });
+  hit.addEventListener('mouseleave', () => { $('hover').style.display = 'none'; });
+}
+
+/* ---------- knoppen ---------- */
+$('toggleChart').addEventListener('click', () => {
+  const w = $('chartWrap');
+  w.classList.toggle('open');
+  $('toggleChart').textContent = w.classList.contains('open') ? 'Verberg grafiek' : 'Toon grafiek';
+});
+
+$('copy').addEventListener('click', async () => {
+  const txt = 'Punten\tCijfer\n' + rows.map(r => fmtP(r.p) + '\t' + fmt(r.g)).join('\n');
+  try {
+    await navigator.clipboard.writeText(txt);
+    $('msg').textContent = 'Gekopieerd.';
+  } catch {
+    $('msg').textContent = 'Kopiëren lukt hier niet; selecteer de tabel handmatig.';
+  }
+  setTimeout(() => $('msg').textContent = '', 2500);
+});
+
+['max', 'pct', 'ces', 'min', 'step'].forEach(id => $(id).addEventListener('input', render));
+render();
+</script>
+</body>
+</html>
